@@ -1,0 +1,193 @@
+from rest_framework import status
+from django.contrib import messages
+from django.shortcuts import render, redirect
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from .models import CustomUser,Profile , Employer_Profile
+from django.contrib.auth import authenticate, login
+from django.contrib.auth import get_user_model
+from django.contrib.auth import login as auth_login 
+from django.contrib.auth.hashers import check_password
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import logout
+from django.shortcuts import get_object_or_404
+from .models import Employer_Profile
+import json
+from rest_framework.generics import DestroyAPIView
+from rest_framework import viewsets
+from rest_framework.generics import RetrieveUpdateAPIView
+from .serializers import UserUpdateSerializer,EmployerProfileSerializer ,PostSerializer
+from django.views.generic import UpdateView
+from django.http import JsonResponse
+from django.contrib.auth import get_user_model
+from django.views.decorators.csrf import csrf_exempt
+import re
+
+
+from django.contrib.auth import authenticate
+
+
+@csrf_exempt
+def login(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            return JsonResponse({'error': 'Username or password missing'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Additional validation: Check if username exists
+        if not CustomUser.objects.filter(username=username).exists():
+            return JsonResponse({'error': 'Invalid username'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(username=username, password=password)
+
+        if user is not None:
+            refresh = RefreshToken.for_user(user)
+            user_data = {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'gender': user.gender, 
+                'contact_number': user.contact_number, 
+            }
+            response_data = {
+                'success': True,
+                'message': 'Login successful',
+                'user_data': user_data,
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'code': status.HTTP_200_OK
+            }
+            return JsonResponse(response_data)
+        else:
+            response_data = {
+                'success': False,
+                'message': 'Invalid credentials',
+            }
+            return JsonResponse(response_data, status=status.HTTP_401_UNAUTHORIZED)
+    else:
+        return render(request, 'login.html')
+
+
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            required_fields = ['first_name', 'last_name', 'username', 'email', 'gender', 'contact_number', 'password1', 'password2']
+            missing_fields = [field for field in required_fields if field not in data or not data[field]]
+            if missing_fields:
+                return JsonResponse({'error': f'Missing fields: {", ".join(missing_fields)}'}, status=status.HTTP_400_BAD_REQUEST)
+            if data['password1'] != data['password2']:
+                return JsonResponse({'error': 'Passwords do not match'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Password validation
+            password = data['password1']
+            if not (len(password) >= 8 and any(c.isupper() for c in password) and any(c.islower() for c in password) and any(c.isdigit() for c in password) and any(c in '!@#$%^&*()_+' for c in password)):
+                return JsonResponse({'error': 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            User = get_user_model()
+            if User.objects.filter(username=data['username']).exists():
+                return JsonResponse({'error': 'Username Taken'}, status=status.HTTP_400_BAD_REQUEST)
+            elif User.objects.filter(email=data['email']).exists():
+                return JsonResponse({'error': 'Email Taken'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = User.objects.create_user(**data)
+            return JsonResponse({'message': 'Successfully Registered'})
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return render(request, 'register.html')
+
+
+def dashboard(request):
+    return render( 'dashboard.html')
+
+def logout(request):
+    logout(request)
+    return redirect('login')
+
+
+
+@csrf_exempt
+def EmployerProfile(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            required_fields = ['profile_id', 'email']
+            missing_fields = [field for field in required_fields if field not in data or not data[field]]
+            if missing_fields:
+                return JsonResponse({'error': f'Required fields are missing: {", ".join(missing_fields)}'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            if Employer_Profile.objects.filter(profile_id=data['profile_id']).exists():
+                return JsonResponse({'error': 'Profile ID already exists'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            if Employer_Profile.objects.filter(email=data['email']).exists():
+                return JsonResponse({'error': 'Email already registered'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = Employer_Profile.objects.create(**data)
+            return JsonResponse({'message': 'Employer Detail Successfully Registered'})
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR) 
+    
+    return render(request, 'Employer_Profile.html')
+
+
+#for Updating the Employer Profile data
+
+class EmployerProfileEditView(RetrieveUpdateAPIView):
+    model = Employer_Profile
+    queryset = Employer_Profile.objects.all()
+    serializer_class = EmployerProfileSerializer
+    lookup_field = 'profile_id'
+    @csrf_exempt 
+    def put(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        response_data = {
+                'success': True,
+                'message': 'Data Updated successfully',
+                'Code': status.HTTP_200_OK}
+        return JsonResponse(response_data)
+
+
+
+#For updating the Registor details
+
+class UserUpdateAPIView(RetrieveUpdateAPIView):
+    queryset = CustomUser.objects.all()
+    serializer_class = UserUpdateSerializer
+    lookup_field = 'username'  
+    @csrf_exempt
+    def put(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        response_data = {
+                'success': True,
+                'message': 'Data Updated successfully',
+                'Code': status.HTTP_200_OK}
+        return JsonResponse(response_data)
+    
+
+# For Deleting the Employer Profile data
+
+class UserDeleteAPIView(DestroyAPIView):
+    queryset = CustomUser.objects.all()
+    lookup_field = 'username' 
+    @csrf_exempt
+    def delete(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        response_data = {
+                'success': True,
+                'message': 'Data Deleted successfully',
+                'Code': status.HTTP_204_NO_CONTENT}
+        return JsonResponse(response_data)
